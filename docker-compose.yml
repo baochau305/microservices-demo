@@ -1,0 +1,64 @@
+version: "3.8"
+
+services:
+  # User Service (Golang)
+  user-service:
+    build:
+      context: ./user-service
+      dockerfile: Dockerfile
+    ports:
+      - "50051:50051"
+    networks:
+      - microservices-network
+    container_name: user-service
+
+  # Product Service (NestJS)
+  product-service:
+    build:
+      context: ./product-service
+      dockerfile: Dockerfile
+    ports:
+      - "50052:50052"
+    networks:
+      - microservices-network
+    container_name: product-service
+
+  # Order Service (Node.js)
+  order-service:
+    build:
+      context: ./order-service
+      dockerfile: Dockerfile
+    ports:
+      - "50053:50053"
+    depends_on:
+      - user-service
+      - product-service
+    networks:
+      - microservices-network
+    container_name: order-service
+    environment:
+      - USER_SERVICE_URL=user-service:50051
+      - PRODUCT_SERVICE_URL=product-service:50052
+
+  # API Gateway (Node.js)
+  api-gateway:
+    build:
+      context: ./api-gateway
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    depends_on:
+      - user-service
+      - product-service
+      - order-service
+    networks:
+      - microservices-network
+    container_name: api-gateway
+    environment:
+      - USER_SERVICE_URL=user-service:50051
+      - PRODUCT_SERVICE_URL=product-service:50052
+      - ORDER_SERVICE_URL=order-service:50053
+
+networks:
+  microservices-network:
+    driver: bridge
