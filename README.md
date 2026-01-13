@@ -1,26 +1,66 @@
 # Microservices Demo
 
-Hệ thống microservices đơn giản để demo cách hoạt động của microservices, API Gateway, và gRPC.
+Hệ thống microservices nâng cao với **Kafka**, **RabbitMQ**, **Saga Pattern**, và **Event-Driven Architecture**.
+
+> 🎯 **New!** Giải quyết các vấn đề thực tế: Distributed transactions, async communication, event streaming, retry logic, và monitoring.
 
 ## 📚 Quick Links
 
 - **[QUICKSTART.md](QUICKSTART.md)** - Hướng dẫn chạy nhanh (bắt đầu từ đây!)
-- **[ARCHITECTURE.md](ARCHITECTURE.md)** - Kiến trúc chi tiết và giải thích concepts
-- **[DIAGRAMS.md](DIAGRAMS.md)** - Sơ đồ trực quan và flow charts
-- **[TEST.md](TEST.md)** - Test cases và examples
+- **[ADVANCED_ARCHITECTURE.md](ADVANCED_ARCHITECTURE.md)** - 🔥 **NEW!** Architecture nâng cao với Kafka & RabbitMQ
+- **[MESSAGE_QUEUE_GUIDE.md](MESSAGE_QUEUE_GUIDE.md)** - 🔥 **NEW!** Chi tiết về Kafka và RabbitMQ
+- **[ARCHITECTURE.md](ARCHITECTURE.md)** - Kiến trúc cơ bản
+- **[DIAGRAMS.md](DIAGRAMS.md)** - Sơ đồ trực quan
+- **[TEST.md](TEST.md)** - Test cases
 - **[DOCKER.md](DOCKER.md)** - Docker deployment guide
-- **[SUMMARY.md](SUMMARY.md)** - Tổng kết và next steps
+- **[SUMMARY.md](SUMMARY.md)** - Tổng kết
 
 ## 🚀 Quick Start
 
 ```bash
-# 1. Cài đặt dependencies
-install.bat  # Windows
+# Chạy tất cả services với Docker Compose
+docker-compose up -d
 
-# 2. Chạy test (sau khi start tất cả services)
-test.ps1     # PowerShell
-test.bat     # Command Prompt
+# Xem logs
+docker-compose logs -f
+
+# Test API
+curl -X POST http://localhost:3000/api/orders \
+  -H "Content-Type: application/json" \
+  -d '{"userId": "1", "productId": "1", "quantity": 2}'
 ```
+
+## 🎯 Vấn Đề Thực Tế Được Giải Quyết
+
+### 1. **Distributed Transactions**
+
+❌ **Problem:** Order cần gọi nhiều service (User, Product, Payment). Nếu payment fail phải rollback.
+
+✅ **Solution:** **SAGA Pattern** - Tự động compensation khi có lỗi
+
+### 2. **Async Communication**
+
+❌ **Problem:** Gửi email không nên block order creation
+
+✅ **Solution:** **RabbitMQ** - Message queue với retry và Dead Letter Queue
+
+### 3. **Event Streaming**
+
+❌ **Problem:** Analytics cần biết mọi order mới
+
+✅ **Solution:** **Kafka** - Event streaming cho real-time analytics
+
+### 4. **Payment Failures**
+
+❌ **Problem:** Payment gateway timeout/unstable
+
+✅ **Solution:** **Retry Logic** - Exponential backoff, tối đa 3 lần
+
+### 5. **Service Decoupling**
+
+❌ **Problem:** Services phụ thuộc lẫn nhau
+
+✅ **Solution:** **Message-Driven** - Services không biết về nhau
 
 ## Kiến trúc
 
@@ -31,22 +71,38 @@ test.bat     # Command Prompt
        │ HTTP/REST
        ▼
 ┌─────────────────┐
-│  API Gateway    │ (Node.js)
-│  Port: 3000     │
+│  API Gateway    │ (Node.js) :3000
 └────────┬────────┘
          │ gRPC
-    ┌────┴────┬──────────┐
-    ▼         ▼          ▼
-┌────────┐ ┌────────┐ ┌────────┐
-│ User   │ │Product │ │ Order  │
-│Service │ │Service │ │Service │
-│(Golang)│ │(NestJS)│ │(NodeJS)│
-│Port:   │ │Port:   │ │Port:   │
-│50051   │ │50052   │ │50053   │
-└────────┘ └────────┘ └────────┘
+    ┌────┴────┬──────────┬──────────┐
+    ▼         ▼          ▼          ▼
+┌────────┐ ┌────────┐ ┌────────┐ ┌────────┐
+│ User   │ │Product │ │Payment │ │ Order  │
+│Service │ │Service │ │Service │ │Service │◄───┐
+│(Golang)│ │(NestJS)│ │(NodeJS)│ │(NodeJS)│    │
+│:50051  │ │:50052  │ │:50054  │ │:50053  │    │
+└────────┘ └────────┘ └────────┘ └───┬────┘    │
+                                      │         │
+                     ┌────────────────┴─────┐   │
+                     │                      │   │
+                     ▼                      ▼   │
+                ┌─────────┐          ┌──────────┴──┐
+                │  Kafka  │          │  RabbitMQ   │
+                │  :9092  │          │   :5672     │
+                └────┬────┘          └──────┬──────┘
+                     │                      │
+                     ▼                      ▼
+              ┌─────────────┐      ┌──────────────┐
+              │ Analytics   │      │Notification  │
+              │  Service    │      │  Service     │
+              └─────────────┘      └──────────────┘
 ```
 
 ## Services
+
+### Core Services (gRPC)
+
+### Core Services (gRPC)
 
 1. **API Gateway** (Node.js - Express)
 
@@ -66,10 +122,45 @@ test.bat     # Command Prompt
    - gRPC server
    - Port: 50052
 
-4. **Order Service** (Node.js)
-   - Quản lý đơn hàng
-   - Gọi đến User và Product service qua gRPC
+4. **Payment Service** (Node.js) 🆕
+
+   - Xử lý thanh toán
+   - Retry logic với exponential backoff
+   - Hỗ trợ refund cho Saga compensation
+   - Port: 50054
+
+5. **Order Service** (Node.js)
+   - Orchestrate Saga Pattern
+   - Publish events vào Kafka
+   - Publish notifications vào RabbitMQ
    - Port: 50053
+
+### Event-Driven Services 🆕
+
+6. **Notification Service** (Node.js)
+
+   - Consumer RabbitMQ
+   - Gửi email notifications
+   - Dead Letter Queue cho failed messages
+   - Retry mechanism
+
+7. **Analytics Service** (Node.js)
+   - Consumer Kafka events
+   - Real-time analytics
+   - Revenue tracking
+   - Order metrics
+
+### Message Brokers 🆕
+
+8. **Kafka** + **Zookeeper**
+
+   - Event streaming platform
+   - Port: 9092
+
+9. **RabbitMQ**
+   - Message queue
+   - Management UI: http://localhost:15672
+   - Port: 5672
 
 ## Cài đặt
 
@@ -78,8 +169,26 @@ test.bat     # Command Prompt
 - Node.js (v16+)
 - Go (v1.19+)
 - npm hoặc yarn
+- Docker & Docker Compose (recommended)
 
-### Cài đặt dependencies
+### Option 1: Docker Compose (Recommended) 🆕
+
+```bash
+# Clone repository
+git clone <repo-url>
+cd microservices-demo
+
+# Start all services
+docker-compose up -d
+
+# View logs
+docker-compose logs -f
+
+# Stop services
+docker-compose down
+```
+
+### Option 2: Local Development
 
 ```bash
 # API Gateway
@@ -173,6 +282,9 @@ curl http://localhost:3000/api/orders/1
 - **Golang**: User Service
 - **NestJS**: Product Service
 - **Node.js**: Order Service
+- **Kafka**: Event streaming, pub/sub pattern
+- **RabbitMQ**: Message queue, async communication
+- **Docker**: Containerization
 
 ## Cấu trúc thư mục
 

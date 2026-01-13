@@ -1,6 +1,48 @@
 # 🚀 Quick Start Guide
 
-## Yêu cầu hệ thống
+## 🎯 Fast Track (5 phút với Docker)
+
+### Yêu cầu
+
+- Docker & Docker Compose
+
+### Chạy ngay
+
+```bash
+# Start tất cả services (10 containers)
+docker-compose up -d
+
+# Đợi 30-60 giây để services khởi động
+docker-compose ps
+
+# Test thử
+curl -X POST http://localhost:3000/api/users \
+  -H "Content-Type: application/json" \
+  -d '{"name": "John Doe", "email": "john@example.com"}'
+
+curl -X POST http://localhost:3000/api/products \
+  -H "Content-Type: application/json" \
+  -d '{"name": "Laptop", "price": 1200}'
+
+curl -X POST http://localhost:3000/api/orders \
+  -H "Content-Type: application/json" \
+  -d '{"userId": "1", "productId": "1", "quantity": 2}'
+
+# Xem logs
+docker-compose logs -f order-service
+docker-compose logs -f analytics-service
+docker-compose logs -f notification-service
+```
+
+### Verify
+
+- API Gateway: http://localhost:3000
+- RabbitMQ UI: http://localhost:15672 (guest/guest)
+- Check analytics: `docker-compose logs analytics-service`
+
+---
+
+## 🛠️ Local Development (Không dùng Docker)
 
 - **Node.js** v16 trở lên
 - **Go** v1.19 trở lên

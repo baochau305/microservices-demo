@@ -1,6 +1,79 @@
 # version: "3.8"
 
 services:
+  # ===== MESSAGE BROKERS =====
+
+  # Zookeeper for Kafka
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.5.0
+    container_name: zookeeper
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    ports:
+      - "2181:2181"
+    networks:
+      - microservices-network
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "2181"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Kafka
+  kafka:
+    image: confluentinc/cp-kafka:7.5.0
+    container_name: kafka
+    depends_on:
+      zookeeper:
+        condition: service_healthy
+    ports:
+      - "9092:9092"
+      - "9094:9094"
+    networks:
+      - microservices-network
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:9094
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "kafka-broker-api-versions",
+          "--bootstrap-server",
+          "localhost:9092",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # RabbitMQ
+  rabbitmq:
+    image: rabbitmq:3.12-management
+    container_name: rabbitmq
+    ports:
+      - "5672:5672" # AMQP port
+      - "15672:15672" # Management UI
+    networks:
+      - microservices-network
+    environment:
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+
+  # ===== MICROSERVICES =====
+
   # User Service (Golang)
   user-service:
     build:
@@ -11,6 +84,11 @@ services:
     networks:
       - microservices-network
     container_name: user-service
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "50051"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   # Product Service (NestJS)
   product-service:
@@ -22,8 +100,29 @@ services:
     networks:
       - microservices-network
     container_name: product-service
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "50052"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
-  # Order Service (Node.js)
+  # Payment Service (Node.js)
+  payment-service:
+    build:
+      context: ./payment-service
+      dockerfile: Dockerfile
+    ports:
+      - "50054:50054"
+    networks:
+      - microservices-network
+    container_name: payment-service
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "50054"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Order Service (Node.js) with Kafka & RabbitMQ
   order-service:
     build:
       context: ./order-service
@@ -31,14 +130,56 @@ services:
     ports:
       - "50053:50053"
     depends_on:
-      - user-service
-      - product-service
+      user-service:
+        condition: service_healthy
+      product-service:
+        condition: service_healthy
+      payment-service:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
     networks:
       - microservices-network
     container_name: order-service
     environment:
       - USER_SERVICE_URL=user-service:50051
       - PRODUCT_SERVICE_URL=product-service:50052
+      - PAYMENT_SERVICE_URL=payment-service:50054
+      - KAFKA_BROKERS=kafka:9092
+      - RABBITMQ_URL=amqp://guest:guest@rabbitmq:5672
+    restart: on-failure
+
+  # Notification Service (Node.js) with RabbitMQ
+  notification-service:
+    build:
+      context: ./notification-service
+      dockerfile: Dockerfile
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - microservices-network
+    container_name: notification-service
+    environment:
+      - RABBITMQ_URL=amqp://guest:guest@rabbitmq:5672
+    restart: on-failure
+
+  # Analytics Service (Node.js) with Kafka
+  analytics-service:
+    build:
+      context: ./analytics-service
+      dockerfile: Dockerfile
+    depends_on:
+      kafka:
+        condition: service_healthy
+    networks:
+      - microservices-network
+    container_name: analytics-service
+    environment:
+      - KAFKA_BROKERS=kafka:9092
+    restart: on-failure
 
   # API Gateway (Node.js)
   api-gateway:
@@ -51,6 +192,7 @@ services:
       - user-service
       - product-service
       - order-service
+      - payment-service
     networks:
       - microservices-network
     container_name: api-gateway
@@ -58,6 +200,11 @@ services:
       - USER_SERVICE_URL=user-service:50051
       - PRODUCT_SERVICE_URL=product-service:50052
       - ORDER_SERVICE_URL=order-service:50053
+      - PAYMENT_SERVICE_URL=payment-service:50054
+    restart: on-failure
+
+volumes:
+  rabbitmq_data:
 
 networks:
   microservices-network:

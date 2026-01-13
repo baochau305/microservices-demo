@@ -1,0 +1,47 @@
+syntax = "proto3";
+
+package payment;
+
+service PaymentService {
+  rpc ProcessPayment (PaymentRequest) returns (PaymentResponse);
+  rpc GetPayment (GetPaymentRequest) returns (Payment);
+  rpc RefundPayment (RefundRequest) returns (RefundResponse);
+}
+
+message PaymentRequest {
+  string orderId = 1;
+  string userId = 2;
+  double amount = 3;
+  string method = 4; // CREDIT_CARD, DEBIT_CARD, PAYPAL, etc.
+}
+
+message PaymentResponse {
+  string id = 1;
+  string status = 2; // SUCCESS, FAILED, PENDING
+  string transactionId = 3;
+  string message = 4;
+}
+
+message GetPaymentRequest {
+  string id = 1;
+}
+
+message Payment {
+  string id = 1;
+  string orderId = 2;
+  string userId = 3;
+  double amount = 4;
+  string method = 5;
+  string status = 6;
+  string transactionId = 7;
+  string timestamp = 8;
+}
+
+message RefundRequest {
+  string paymentId = 1;
+}
+
+message RefundResponse {
+  bool success = 1;
+  string message = 2;
+}
