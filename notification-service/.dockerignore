@@ -1,0 +1,10 @@
+# Build context là chính thư mục này (Dockerfile dùng `COPY . .`).
+# Không loại node_modules thì bản host sẽ đè lên bản `npm ci` vừa cài trong image.
+node_modules
+dist
+*.log
+npm-debug.log*
+.env
+.env.*
+*.md
+.DS_Store

@@ -1,25 +1,23 @@
-FROM golang:1.21-alpine AS builder
+FROM golang:1.25-alpine AS builder
 
 WORKDIR /app
 
-# Copy go mod files
-COPY go.mod ./
+# Cache dependencies
+COPY go.mod go.sum ./
 RUN go mod download
 
-# Copy source code
+# Build
 COPY . .
+RUN CGO_ENABLED=0 go build -o /app/bin/server ./cmd/server
 
-# Build the application
-RUN go build -o main .
-
-# Final stage
+# ---- Runtime ----
 FROM alpine:latest
 
-WORKDIR /root/
+RUN apk add --no-cache ca-certificates
 
-# Copy the binary from builder
-COPY --from=builder /app/main .
+WORKDIR /app
+COPY --from=builder /app/bin/server .
 
 EXPOSE 50051
 
-CMD ["./main"]
+CMD ["./server"]

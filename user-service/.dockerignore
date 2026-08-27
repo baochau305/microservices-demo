@@ -1,0 +1,9 @@
+# Build context là chính thư mục này (Dockerfile dùng `COPY . .`).
+# Go cần go.mod, go.sum, cmd/, internal/, proto/ -> không loại những thứ đó.
+.git
+bin/
+*.log
+*.md
+.env
+.env.*
+.DS_Store

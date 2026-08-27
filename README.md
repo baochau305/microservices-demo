@@ -18,11 +18,11 @@ Hệ thống microservices nâng cao với **Kafka**, **RabbitMQ**, **Saga Patte
 ## 🚀 Quick Start
 
 ```bash
-# Chạy tất cả services với Docker Compose
-docker-compose up -d
+# Chạy tất cả services với Docker Compose (build lại image lần đầu)
+docker compose up -d --build
 
 # Xem logs
-docker-compose logs -f
+docker compose logs -f
 
 # Test API
 curl -X POST http://localhost:3000/api/orders \
@@ -166,10 +166,10 @@ curl -X POST http://localhost:3000/api/orders \
 
 ### Prerequisites
 
-- Node.js (v16+)
-- Go (v1.19+)
-- npm hoặc yarn
-- Docker & Docker Compose (recommended)
+- Docker & Docker Compose (khuyên dùng — kèm sẵn PostgreSQL, Kafka, RabbitMQ)
+- Node.js (v18+) — nếu chạy local
+- Go (v1.25+) — nếu build user-service local (pgx yêu cầu)
+- PostgreSQL 16 — nếu chạy local không qua Docker
 
 ### Option 1: Docker Compose (Recommended) 🆕
 
@@ -244,8 +244,16 @@ npm start
 
 ### Order Service (qua API Gateway)
 
-- `POST /api/orders` - Tạo đơn hàng mới (kết hợp User + Product)
+- `POST /api/orders` - Tạo đơn hàng mới (chạy Saga: User + Product + Payment)
 - `GET /api/orders/:id` - Lấy thông tin đơn hàng
+
+### Payment Service (qua API Gateway)
+
+- `GET /api/payments/:id` - Tra cứu thanh toán (payment được tạo bên trong Saga)
+
+> **Lưu ý:** ID hiện là **UUID** (sinh bởi Postgres). Hãy tạo user & product
+> trước, lấy `id` trả về rồi mới tạo order. Hệ thống cần PostgreSQL nên dùng
+> `docker compose up` hoặc set `DATABASE_URL` khi chạy local.
 
 ## Test API
 
@@ -281,21 +289,38 @@ curl http://localhost:3000/api/orders/1
 - **Node.js/Express**: API Gateway
 - **Golang**: User Service
 - **NestJS**: Product Service
-- **Node.js**: Order Service
+- **Node.js**: Order / Payment / Notification / Analytics Service
+- **PostgreSQL**: Lưu trữ (database-per-service), pg + TypeORM
 - **Kafka**: Event streaming, pub/sub pattern
 - **RabbitMQ**: Message queue, async communication
+- **pino / slog**: Structured logging
 - **Docker**: Containerization
 
 ## Cấu trúc thư mục
 
+Mỗi service được chia layer theo hướng production (chi tiết xem [CLAUDE.md](CLAUDE.md)).
+
 ```
 microservices-demo/
-├── proto/                  # Protocol Buffer definitions
-│   ├── user.proto
-│   ├── product.proto
-│   └── order.proto
-├── api-gateway/           # API Gateway (Node.js)
-├── user-service/          # User Service (Golang)
-├── product-service/       # Product Service (NestJS)
-└── order-service/         # Order Service (Node.js)
+├── proto/                       # Protocol Buffer definitions (dùng chung)
+│   ├── user.proto  product.proto  order.proto  payment.proto
+├── infra/postgres/init/         # SQL khởi tạo database-per-service
+├── api-gateway/                 # Node/Express — HTTP→gRPC
+│   └── src/{config,logger,proto,clients,routes,middlewares,utils}
+├── user-service/                # Go (clean architecture)
+│   ├── cmd/server/main.go
+│   └── internal/{config,logger,db,domain,repository,service,handler,server}
+├── product-service/             # NestJS (modular + TypeORM)
+│   └── src/{config,database,common,product/{entities,dto}}
+├── order-service/               # Node — Saga orchestrator
+│   └── src/{config,logger,db,proto,clients,messaging,repositories,sagas,services,handlers}
+├── payment-service/             # Node — payment + retry + refund
+│   └── src/{config,logger,db,proto,gateway,repositories,services,handlers}
+├── notification-service/        # Node — RabbitMQ consumer (DLQ + retry)
+│   └── src/{config,logger,messaging,services,handlers}
+├── analytics-service/           # Node — Kafka consumer + Postgres
+│   └── src/{config,logger,db,messaging,repositories,services}
+├── docker-compose.yml
+├── .env.example
+└── CLAUDE.md
 ```

@@ -1,12 +1,36 @@
-# version: "3.8"
-
 services:
+  # ===== DATA STORES =====
+
+  # PostgreSQL (database-per-service: userdb, productdb, orderdb, paymentdb, analyticsdb)
+  postgres:
+    image: postgres:16-alpine
+    container_name: postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+    ports:
+      - "${POSTGRES_HOST_PORT:-5432}:5432"
+    networks:
+      - microservices-network
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      # Chỉ chạy khi volume postgres_data còn RỖNG. Thêm database mới cho service
+      # mới thì phải `docker compose down -v`, nếu không service đó sẽ crash loop.
+      - ./infra/postgres/init:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   # ===== MESSAGE BROKERS =====
 
   # Zookeeper for Kafka
   zookeeper:
     image: confluentinc/cp-zookeeper:7.5.0
     container_name: zookeeper
+    restart: unless-stopped
     environment:
       ZOOKEEPER_CLIENT_PORT: 2181
       ZOOKEEPER_TICK_TIME: 2000
@@ -14,8 +38,11 @@ services:
       - "2181:2181"
     networks:
       - microservices-network
+    volumes:
+      - zookeeper_data:/var/lib/zookeeper/data
+      - zookeeper_log:/var/lib/zookeeper/log
     healthcheck:
-      test: ["CMD", "nc", "-z", "localhost", "2181"]
+      test: ["CMD", "nc", "-z", "127.0.0.1", "2181"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -24,6 +51,10 @@ services:
   kafka:
     image: confluentinc/cp-kafka:7.5.0
     container_name: kafka
+    # Cần restart policy: khi Kafka khởi động lại nhanh hơn thời gian Zookeeper
+    # hết hạn session của broker cũ, nó chết với NodeExistsException. Lần thử
+    # sau (sau khi session hết hạn) sẽ lên bình thường.
+    restart: unless-stopped
     depends_on:
       zookeeper:
         condition: service_healthy
@@ -32,6 +63,10 @@ services:
       - "9094:9094"
     networks:
       - microservices-network
+    volumes:
+      # Không có volume thì restart Kafka là mất sạch topic order-events LẪN
+      # __consumer_offsets -> analytics đọc lại từ đầu hoặc mất event, rất khó debug.
+      - kafka_data:/var/lib/kafka/data
     environment:
       KAFKA_BROKER_ID: 1
       KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
@@ -39,7 +74,14 @@ services:
       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
       KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
-      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      # Tắt auto-create: topic do kafka-init tạo tường minh. Gõ sai tên topic sẽ
+      # báo lỗi ngay thay vì âm thầm tạo topic rỗng rồi ngồi chờ mãi không có message.
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+      # Cho demo 1 broker: giảm thời gian khởi động và rebalance.
+      KAFKA_OFFSETS_TOPIC_NUM_PARTITIONS: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
     healthcheck:
       test:
         [
@@ -52,29 +94,73 @@ services:
       timeout: 5s
       retries: 5
 
+  # Tạo topic Kafka tường minh, thay cho auto-create.
+  #
+  # Không có bước này, topic sinh ra ngầm lúc producer gửi lần đầu với đúng 1
+  # partition, còn analytics-service thì subscribe trước đó nên log đầy
+  # UNKNOWN_TOPIC_OR_PARTITION rồi mới tự khỏi — nhìn như lỗi trong khi không phải.
+  kafka-init:
+    image: confluentinc/cp-kafka:7.5.0
+    container_name: kafka-init
+    depends_on:
+      kafka:
+        condition: service_healthy
+    networks:
+      - microservices-network
+    restart: "no"
+    volumes:
+      - ./infra/kafka/init-topics.sh:/init-topics.sh:ro
+    entrypoint: ["bash", "/init-topics.sh"]
+    environment:
+      KAFKA_BOOTSTRAP: kafka:9092
+
   # RabbitMQ
   rabbitmq:
     image: rabbitmq:3.12-management
     container_name: rabbitmq
+    restart: unless-stopped
     ports:
       - "5672:5672" # AMQP port
-      - "15672:15672" # Management UI
+      - "${RABBITMQ_UI_HOST_PORT:-15672}:15672" # Management UI
     networks:
       - microservices-network
     environment:
-      RABBITMQ_DEFAULT_USER: guest
-      RABBITMQ_DEFAULT_PASS: guest
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-guest}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASS:-guest}
     healthcheck:
-      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "check_running"]
       interval: 10s
       timeout: 5s
       retries: 5
     volumes:
       - rabbitmq_data:/var/lib/rabbitmq
 
+  # Khai báo topology RabbitMQ MỘT LẦN, ở tầng hạ tầng.
+  #
+  # Trước đây order-service và notification-service cùng assertQueue
+  # "order_notifications" nhưng với arguments khác nhau (một bên có DLX, một bên
+  # không) -> AMQP trả về 406 PRECONDITION_FAILED cho bên khai báo sau. Giờ chỉ
+  # container này khai báo; các service chỉ checkQueue nên không thể lệch nhau.
+  rabbitmq-init:
+    image: rabbitmq:3.12-management
+    container_name: rabbitmq-init
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - microservices-network
+    restart: "no"
+    volumes:
+      - ./infra/rabbitmq/init-topology.sh:/init-topology.sh:ro
+    entrypoint: ["sh", "/init-topology.sh"]
+    environment:
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_USER: ${RABBITMQ_USER:-guest}
+      RABBITMQ_PASS: ${RABBITMQ_PASS:-guest}
+
   # ===== MICROSERVICES =====
 
-  # User Service (Golang)
+  # User Service (Golang) + Postgres
   user-service:
     build:
       context: ./user-service
@@ -84,127 +170,212 @@ services:
     networks:
       - microservices-network
     container_name: user-service
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      - GRPC_PORT=50051
+      - DATABASE_URL=postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/userdb
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+    restart: on-failure
+    # Shutdown handler tự thoát sau 10s; cho Docker rộng hơn để không SIGKILL giữa chừng.
+    stop_grace_period: 15s
     healthcheck:
-      test: ["CMD", "nc", "-z", "localhost", "50051"]
+      test: ["CMD", "nc", "-z", "127.0.0.1", "50051"]
       interval: 10s
       timeout: 5s
       retries: 5
 
-  # Product Service (NestJS)
+  # Product Service (NestJS) + Postgres
   product-service:
     build:
-      context: ./product-service
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: ./product-service/Dockerfile
     ports:
       - "50052:50052"
     networks:
       - microservices-network
     container_name: product-service
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      - GRPC_URL=0.0.0.0:50052
+      - PROTO_DIR=/app/proto
+      - DATABASE_URL=postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/productdb
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+    restart: on-failure
+    # Shutdown handler tự thoát sau 10s; cho Docker rộng hơn để không SIGKILL giữa chừng.
+    stop_grace_period: 15s
     healthcheck:
-      test: ["CMD", "nc", "-z", "localhost", "50052"]
+      test: ["CMD", "nc", "-z", "127.0.0.1", "50052"]
       interval: 10s
       timeout: 5s
       retries: 5
 
-  # Payment Service (Node.js)
+  # Payment Service (Node.js) + Postgres
   payment-service:
     build:
-      context: ./payment-service
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: ./payment-service/Dockerfile
     ports:
       - "50054:50054"
     networks:
       - microservices-network
     container_name: payment-service
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      - GRPC_PORT=50054
+      - PROTO_DIR=/app/proto
+      - DATABASE_URL=postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/paymentdb
+      - PAYMENT_FAILURE_RATE=${PAYMENT_FAILURE_RATE:-0.2}
+      - PAYMENT_MAX_RETRIES=${PAYMENT_MAX_RETRIES:-3}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+    restart: on-failure
+    # Shutdown handler tự thoát sau 10s; cho Docker rộng hơn để không SIGKILL giữa chừng.
+    stop_grace_period: 15s
     healthcheck:
-      test: ["CMD", "nc", "-z", "localhost", "50054"]
+      test: ["CMD", "nc", "-z", "127.0.0.1", "50054"]
       interval: 10s
       timeout: 5s
       retries: 5
 
-  # Order Service (Node.js) with Kafka & RabbitMQ
+  # Order Service (Node.js) with Postgres + Kafka & RabbitMQ
   order-service:
     build:
-      context: ./order-service
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: ./order-service/Dockerfile
     ports:
       - "50053:50053"
     depends_on:
+      postgres:
+        condition: service_healthy
       user-service:
         condition: service_healthy
       product-service:
         condition: service_healthy
       payment-service:
         condition: service_healthy
-      kafka:
-        condition: service_healthy
-      rabbitmq:
-        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+      rabbitmq-init:
+        condition: service_completed_successfully
     networks:
       - microservices-network
     container_name: order-service
     environment:
+      - GRPC_PORT=50053
+      - PROTO_DIR=/app/proto
+      - DATABASE_URL=postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/orderdb
       - USER_SERVICE_URL=user-service:50051
       - PRODUCT_SERVICE_URL=product-service:50052
       - PAYMENT_SERVICE_URL=payment-service:50054
       - KAFKA_BROKERS=kafka:9092
-      - RABBITMQ_URL=amqp://guest:guest@rabbitmq:5672
+      - RABBITMQ_URL=amqp://${RABBITMQ_USER:-guest}:${RABBITMQ_PASS:-guest}@rabbitmq:5672
+      # Deadline gRPC: không có thì service treo sẽ làm saga đứng mãi, không rollback.
+      - GRPC_TIMEOUT_MS=${GRPC_TIMEOUT_MS:-5000}
+      - GRPC_PAYMENT_TIMEOUT_MS=${GRPC_PAYMENT_TIMEOUT_MS:-15000}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
     restart: on-failure
+    # Shutdown handler tự thoát sau 10s; cho Docker rộng hơn để không SIGKILL giữa chừng.
+    stop_grace_period: 15s
+    healthcheck:
+      test: ["CMD", "nc", "-z", "127.0.0.1", "50053"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
-  # Notification Service (Node.js) with RabbitMQ
+  # Notification Service (Node.js) - RabbitMQ consumer (stateless)
   notification-service:
     build:
       context: ./notification-service
       dockerfile: Dockerfile
     depends_on:
-      rabbitmq:
-        condition: service_healthy
+      rabbitmq-init:
+        condition: service_completed_successfully
     networks:
       - microservices-network
     container_name: notification-service
     environment:
-      - RABBITMQ_URL=amqp://guest:guest@rabbitmq:5672
+      - RABBITMQ_URL=amqp://${RABBITMQ_USER:-guest}:${RABBITMQ_PASS:-guest}@rabbitmq:5672
+      - EMAIL_FAILURE_RATE=${EMAIL_FAILURE_RATE:-0.1}
+      - NOTIFICATION_MAX_RETRIES=${NOTIFICATION_MAX_RETRIES:-3}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
     restart: on-failure
+    # Shutdown handler tự thoát sau 10s; cho Docker rộng hơn để không SIGKILL giữa chừng.
+    stop_grace_period: 15s
 
-  # Analytics Service (Node.js) with Kafka
+  # Analytics Service (Node.js) with Kafka + Postgres
   analytics-service:
     build:
       context: ./analytics-service
       dockerfile: Dockerfile
     depends_on:
-      kafka:
+      postgres:
         condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
     networks:
       - microservices-network
     container_name: analytics-service
     environment:
       - KAFKA_BROKERS=kafka:9092
+      - DATABASE_URL=postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/analyticsdb
+      - LOG_LEVEL=${LOG_LEVEL:-info}
     restart: on-failure
+    # Shutdown handler tự thoát sau 10s; cho Docker rộng hơn để không SIGKILL giữa chừng.
+    stop_grace_period: 15s
 
   # API Gateway (Node.js)
   api-gateway:
     build:
-      context: ./api-gateway
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: ./api-gateway/Dockerfile
     ports:
-      - "3000:3000"
+      - "${GATEWAY_HOST_PORT:-3000}:3000"
     depends_on:
-      - user-service
-      - product-service
-      - order-service
-      - payment-service
+      user-service:
+        condition: service_healthy
+      product-service:
+        condition: service_healthy
+      order-service:
+        condition: service_healthy
+      payment-service:
+        condition: service_healthy
     networks:
       - microservices-network
     container_name: api-gateway
     environment:
+      - GATEWAY_PORT=3000
+      - PROTO_DIR=/app/proto
       - USER_SERVICE_URL=user-service:50051
       - PRODUCT_SERVICE_URL=product-service:50052
       - ORDER_SERVICE_URL=order-service:50053
       - PAYMENT_SERVICE_URL=payment-service:50054
+      # CreateOrder chạy cả saga nên cần deadline rộng hơn hẳn các call CRUD.
+      - GRPC_TIMEOUT_MS=${GRPC_TIMEOUT_MS:-5000}
+      - GRPC_CREATE_ORDER_TIMEOUT_MS=${GRPC_CREATE_ORDER_TIMEOUT_MS:-45000}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
     restart: on-failure
+    # Shutdown handler tự thoát sau 10s; cho Docker rộng hơn để không SIGKILL giữa chừng.
+    stop_grace_period: 15s
+    # Cửa ngõ public duy nhất mà trước đây lại là service duy nhất không có healthcheck.
+    # Dùng 127.0.0.1 chứ không phải localhost: localhost resolve ra ::1 trước, mà
+    # server chỉ bind IPv4 -> healthcheck sẽ không bao giờ pass.
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:3000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
 volumes:
   rabbitmq_data:
+  postgres_data:
+  kafka_data:
+  zookeeper_data:
+  zookeeper_log:
 
 networks:
   microservices-network:

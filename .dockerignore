@@ -1,0 +1,37 @@
+# Build context của api-gateway, order-service, payment-service, product-service
+# là REPO ROOT (xem docker-compose.yml), nên file này áp cho cả 4.
+#
+# Quan trọng nhất là loại node_modules: các Dockerfile chạy `npm ci` rồi mới
+# `COPY <service>/ ./`. Không có file này, node_modules của host (có cả devDeps,
+# và native binary build cho OS của host) sẽ đè lên đúng thứ vừa cài trong image
+# -> layer cache vô nghĩa, image phình to, và vỡ khi máy khác kiến trúc.
+
+**/node_modules
+**/dist
+**/build
+
+.git
+.gitignore
+.dockerignore
+
+**/*.log
+**/npm-debug.log*
+
+# Không bao giờ đưa secret vào image. .env.example thì vô hại nhưng cũng không cần.
+.env
+.env.*
+
+# Tài liệu và script tiện ích - không có gì đọc chúng lúc runtime.
+*.md
+install.sh
+install.bat
+run-all.bat
+setup-protoc.ps1
+test.sh
+test.ps1
+test.bat
+
+.vscode
+.idea
+.claude
+**/.DS_Store

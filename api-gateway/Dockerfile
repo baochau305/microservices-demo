@@ -1,18 +1,13 @@
-FROM node:18-alpine
+# Build context = repo root (xem docker-compose.yml) để copy được thư mục proto/ dùng chung.
+FROM node:20-alpine
 
 WORKDIR /app
 
-# Copy package files
-COPY package*.json ./
+COPY api-gateway/package*.json ./
+RUN npm ci --omit=dev
 
-# Install dependencies
-RUN npm ci --only=production
-
-# Copy source code
-COPY . .
-
-# Copy proto files
-COPY ../proto ../proto
+COPY api-gateway/ ./
+COPY proto/ ./proto/
 
 EXPOSE 3000
 

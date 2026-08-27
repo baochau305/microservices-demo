@@ -6,6 +6,12 @@ service PaymentService {
   rpc ProcessPayment (PaymentRequest) returns (PaymentResponse);
   rpc GetPayment (GetPaymentRequest) returns (Payment);
   rpc RefundPayment (RefundRequest) returns (RefundResponse);
+
+  // Compensation của Saga: hoàn tiền theo orderId (correlation id) thay vì
+  // paymentId. Cần thiết vì nếu ProcessPayment timeout SAU khi đã charge thì
+  // order-service không hề biết paymentId để mà refund.
+  // Idempotent: gọi nhiều lần, hoặc gọi khi chưa charge gì, đều trả success.
+  rpc RefundByOrderId (RefundByOrderRequest) returns (RefundResponse);
 }
 
 message PaymentRequest {
@@ -39,6 +45,10 @@ message Payment {
 
 message RefundRequest {
   string paymentId = 1;
+}
+
+message RefundByOrderRequest {
+  string orderId = 1;
 }
 
 message RefundResponse {

@@ -1,17 +1,17 @@
 {
-    "name": "notification-service",
-    "version": "1.0.0",
-    "description": "Notification Service with RabbitMQ",
-    "main": "index.js",
-    "scripts": {
-        "start": "node index.js",
-        "dev": "nodemon index.js"
-    },
-    "dependencies": {
-        "amqplib": "^0.10.3",
-        "nodemailer": "^6.9.7"
-    },
-    "devDependencies": {
-        "nodemon": "^3.0.2"
-    }
+  "name": "notification-service",
+  "version": "1.0.0",
+  "description": "Notification Service - RabbitMQ consumer with retry + DLQ",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "nodemon index.js"
+  },
+  "dependencies": {
+    "amqplib": "^0.10.3",
+    "pino": "^9.0.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.2"
+  }
 }
